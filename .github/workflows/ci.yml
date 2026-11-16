@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-lint-unit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: poros
+          POSTGRES_PASSWORD: ci-password-0123456789
+          POSTGRES_DB: poros
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U poros"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      JWT_SECRET: ci-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://poros:ci-password-0123456789@127.0.0.1:55432/poros?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # SeaweedFS 需要自定义 CMD（GitHub service 容器不支持自定义命令），用步骤级 docker run + 就绪等待
+      - name: 起 S3（SeaweedFS，FILE-01 真实 S3 往返依赖）
+        run: |
+          docker run -d --name poros-s3 -p 127.0.0.1:59000:8333 chrislusf/seaweedfs:3.85 server -dir=/data -s3 -s3.port=8333
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:59000/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:59000/ >/dev/null
+      - run: npx prisma migrate deploy
+      - run: npm run build
+      - run: npm run lint
+      - name: API 验收（含权限负向/职责分离/Judgment 质量状态）
+        run: npx vitest run tests/api
+
+  isolation:
+    runs-on: ubuntu-latest
+    env:
+      POROS_DB_PASSWORD: ci-password-0123456789
+      JWT_SECRET: ci-jwt-secret-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: ISO-01 哨兵目录负向（仿真宿主 .dsh 零接触）
+        run: node tests/isolation/iso-01-sentinel.mjs
+      - name: ISO-02 Compose 卷/权限/网络静态审计
+        run: node tests/isolation/iso-02-compose-audit.mjs
+      - name: 起专属容器（db/s3/dsh；同时构建 poros/dsh 镜像）
+        run: docker compose -f deploy/docker-compose.yml up -d db s3 dsh
+      - name: ISO-03 双实例互不影响（独立 compose project 真实断言；镜像已就绪）
+        run: node tests/isolation/iso-03-dual-instance.mjs
+      - name: ISO-05 容器越宿主权限负向
+        run: node tests/isolation/iso-05-container-escape.mjs
+
+  e2e-real-dsh:
+    runs-on: ubuntu-latest
+    needs: [build-lint-unit, isolation]
+    env:
+      POROS_DB_PASSWORD: ci-password-0123456789
+      JWT_SECRET: ci-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://poros:ci-password-0123456789@127.0.0.1:55432/poros?schema=public
+      POROS_E2E_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 起专属容器（dsh 常驻运行时）
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d db s3 dsh
+          for i in $(seq 1 40); do docker compose -f deploy/docker-compose.yml exec -T db pg_isready -U poros >/dev/null 2>&1 && break; sleep 1; done
+          docker compose -f deploy/docker-compose.yml exec -T db pg_isready -U poros
+      - run: npx prisma migrate deploy
+      - name: 端到端最小闭环（真实 DSH 执行 + 测试桩模型，如实标注）
+        run: node tests/e2e/run-e2e.mjs

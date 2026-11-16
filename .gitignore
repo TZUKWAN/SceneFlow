@@ -6,3 +6,5 @@ coverage/
 pi-package/dist/
 .edge-tmp/
 .minimap-*.png
+.env
+deploy/.env

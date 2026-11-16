@@ -1,0 +1,97 @@
+# Poros Enterprise 部署边界（PRD §4.1）
+# 宿主 DSH 完全不参与：本 Compose 项目无宿主路径挂载、无 Docker socket、无特权、无 host 网络。
+name: poros
+
+services:
+  dsh:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.dsh
+      args:
+        DSH_VERSION: "0.2.2-rc.1"
+    image: poros/dsh:0.2.2-rc.1
+    # 常驻运行时容器：Poros API 经 docker exec 在其中拉起真实 dsh headless 会话（审查项①）。
+    command: ["sleep", "infinity"]
+    user: "10001:10001"
+    environment:
+      HOME: /home/poros
+      XDG_CONFIG_HOME: /home/poros/.config
+      XDG_DATA_HOME: /home/poros/.local
+      XDG_CACHE_HOME: /home/poros/.cache
+      DSH_HOME: /home/poros/.dsh
+      # DSH 原生绑定加载器默认把 .node 物化到 os.tmpdir()（本服务 /tmp 为 noexec tmpfs 硬化）
+      # 再 require——noexec 上 mmap 失败。关闭该非必需缓存，直接从镜像路径加载（硬化不放松）。
+      NARB_DISABLE_NATIVE_CACHE: "1"
+      # 模型密钥只允许经 Poros Secrets 注入到运行服务，再按需传参；不写入镜像与本文件。
+    volumes:
+      - dsh-home:/home/poros/.dsh
+      - dsh-config:/home/poros/.config
+      - dsh-data:/home/poros/.local
+      - dsh-cache:/home/poros/.cache
+    networks:
+      - poros-net
+    # 不发布任何端口：DSH 仅 poros-net 内可达；对外只开放未来 web 服务的入口。
+    ports: []
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "dsh", "--version"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: poros
+      POSTGRES_PASSWORD: ${POROS_DB_PASSWORD:?请在 .env 设置}
+      POSTGRES_DB: poros
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - poros-net
+    # 仅环回发布供开发机迁移/测试；生产走 poros-net 内部、不发布。
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poros"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  s3:
+    image: chrislusf/seaweedfs:3.85
+    command: server -dir=/data -s3 -s3.port=8333
+    volumes:
+      - s3-data:/data
+    networks:
+      - poros-net
+    ports:
+      - "127.0.0.1:59000:8333"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8333/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+networks:
+  poros-net:
+    driver: bridge
+
+volumes:
+  dsh-home:
+  dsh-config:
+  dsh-data:
+  dsh-cache:
+  db-data:
+  s3-data:

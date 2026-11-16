@@ -1,9 +1,0 @@
-{
-  "manifest_version": 3,
-  "name": "场景工作台浏览器上下文",
-  "version": "0.1.0",
-  "permissions": ["contextMenus", "storage"],
-  "host_permissions": ["http://127.0.0.1:4320/*"],
-  "background": { "service_worker": "service-worker.js" },
-  "options_page": "options.html"
-}

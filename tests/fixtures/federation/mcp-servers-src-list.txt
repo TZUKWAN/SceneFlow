@@ -1,7 +1,0 @@
-everything
-fetch
-filesystem
-git
-memory
-sequentialthinking
-time

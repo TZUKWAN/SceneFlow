@@ -1,0 +1,33 @@
+# Poros 专属 DSH 运行时镜像（P0 隔离：唯一 Harness，独立 HOME/数据卷，非 root）
+# 基线锁定见 docs/REUSE_AUDIT.md；版本与镜像 digest 记录在 docs/ISOLATION.md（构建后回填）。
+FROM node:24-bookworm-slim
+
+ARG DSH_VERSION=0.2.2-rc.1
+LABEL org.poros.component="dsh-runtime" \
+      org.poros.isolation="dedicated-home non-root no-host-mounts" \
+      org.poros.dsh-version="${DSH_VERSION}"
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates git curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @deepseek-ai/dsh@${DSH_VERSION} --no-audit --no-fund \
+ && npm cache clean --force
+
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin poros \
+ && mkdir -p /home/poros/.dsh /home/poros/.config /home/poros/.local /home/poros/.cache \
+ && chown -R poros:poros /home/poros
+
+USER poros
+ENV HOME=/home/poros \
+    XDG_CONFIG_HOME=/home/poros/.config \
+    XDG_DATA_HOME=/home/poros/.local/share \
+    XDG_CACHE_HOME=/home/poros/.cache \
+    DSH_HOME=/home/poros/.dsh
+
+WORKDIR /home/poros
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD dsh --version || exit 1
+
+# 默认无参数打印帮助；真实运行由 Poros 运行服务以显式参数拉起（见 src/server/dsh-launcher.ts）。
+CMD ["dsh", "--help"]

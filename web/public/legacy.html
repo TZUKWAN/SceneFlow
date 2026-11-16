@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Poros Enterprise</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--fg:#e6e9ef;--mut:#8b93a3;--acc:#4f8cff;--ok:#3fb27f;--bad:#d05555;--warn:#d09a3f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header b{color:var(--acc)}nav button{background:none;border:none;color:var(--mut);padding:6px 10px;cursor:pointer;border-radius:6px}
+nav button.on{color:var(--fg);background:#222838}
+main{padding:16px;max-width:1080px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+input,textarea,select{width:100%;background:#10131a;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px;margin:4px 0}
+button{background:var(--acc);color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer}
+button.ghost{background:#232838}button.small{padding:4px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;background:#232838;color:var(--mut)}
+.tag.ok{background:rgba(63,178,127,.15);color:var(--ok)}.tag.bad{background:rgba(208,85,85,.15);color:var(--bad)}.tag.warn{background:rgba(208,154,63,.15);color:var(--warn)}
+pre{background:#10131a;border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;font-size:12px}
+.row{display:flex;gap:10px;align-items:center}.grow{flex:1}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#232838;border:1px solid var(--line);padding:8px 16px;border-radius:8px;display:none}
+</style>
+</head>
+<body>
+<header><b>Poros</b><span class="tag">Enterprise · 专属 DSH 隔离运行时</span>
+<nav id="nav" style="display:none">
+<button data-p="workspace">工作台</button><button data-p="agents">Agent 目录/构建</button><button data-p="judgments">Judgment</button><button data-p="files">文件</button><button data-p="integrations">集成状态</button>
+</nav>
+<span class="grow"></span><span id="who" class="tag"></span><button id="logout" class="ghost small" style="display:none">退出</button></header>
+<main id="view"></main>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);let token=localStorage.sf_token||'',me=null;
+const toast=m=>{const t=$('#toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2600)};
+async function api(path,opt={}){const r=await fetch('/api'+path,{...opt,headers:{'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{})}});
+	const j=await r.json().catch(()=>({ok:false,error:'响应解析失败'}));if(r.status===401){logout();throw new Error(j.error||'401')}if(!j.ok)throw new Error(j.error||('HTTP '+r.status));return j}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function tag(s,cls){return `<span class="tag ${cls||''}">${esc(s)}</span>`}
+
+function renderLogin(){$('#nav').style.display='none';$('#logout').style.display='none';$('#who').textContent='';
+$('#view').innerHTML=`<div class="card" style="max-width:420px;margin:8vh auto"><h3>登录 Poros 企业工作台</h3>
+<label>邮箱</label><input id="em" value="employee@a.test"><label>密码</label><input id="pw" type="password" value="employee-pass-123">
+<label>组织 ID</label><input id="og" value="org-a"><button onclick="doLogin()">登录</button>
+<p style="color:var(--mut);font-size:12px">开发种子账号见 src/server/seed.ts；生产禁用种子。</p></div>`}
+async function doLogin(){try{const j=await api('/auth/login',{method:'POST',body:JSON.stringify({email:$('#em').value,password:$('#pw').value,organizationId:$('#og').value})});
+token=j.token;localStorage.sf_token=token;await boot()}catch(e){toast('登录失败: '+e.message)}}
+function logout(){token='';me=null;delete localStorage.sf_token;renderLogin()}
+$('#logout').onclick=logout;
+
+const pages={workspace:renderWorkspace,agents:renderAgents,judgments:renderJudgments,files:renderFiles,integrations:renderIntegrations};
+let cur='workspace';
+async function boot(){const t=atob(token.split('.')[1]||'e30=');me=JSON.parse(t);$('#nav').style.display='flex';$('#logout').style.display='inline';$('#who').textContent=me.email+' · '+me.role;goto('workspace')}
+function goto(p){cur=p;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));pages[p]().catch(e=>{$('#view').innerHTML=`<div class="card">加载失败: ${esc(e.message)}</div>`})}
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>goto(b.dataset.p));
+
+async function renderWorkspace(){const a=await api('/agents');
+$('#view').innerHTML=`<div class="card"><h3>下达任务</h3><div class="row"><select id="ag" class="grow">${a.agents.filter(x=>x.status==='PUBLISHED').map(x=>`<option value="${x.id}">${esc(x.name)} v${x.versions[0]?.version??''}</option>`).join('')}</select></div>
+<textarea id="pr" rows="3" placeholder="用自然语言描述任务，例如：撰写竞品报告"></textarea><button onclick="submitTask()">提交并执行</button><span id="runout" class="grow"></span></div><div id="events" class="card" style="display:none"><h3>运行事件（SSE 流）</h3><pre id="evlog"></pre></div>`}
+async function submitTask(){const ag=$('#ag').value,pr=$('#pr').value;if(!ag||!pr)return toast('选择已发布 Agent 并填写任务');
+try{const j=await api('/tasks',{method:'POST',body:JSON.stringify({agentId:ag,prompt:pr})});$('#runout').innerHTML=tag(j.run.status,j.run.status==='SUCCEEDED'?'ok':'bad');
+$('#events').style.display='block';$('#evlog').textContent='连接事件流…';
+const es=new EventSource('/api/tasks/'+j.taskId+'/events?token='+encodeURIComponent(token));
+es.onmessage=e=>{$('#evlog').textContent+='\n'+e.data};es.addEventListener('done',()=>es.close());
+setTimeout(()=>{es.close();$('#evlog').textContent+='\n[流结束]'},5000)}catch(e){toast('任务失败: '+e.message)}}
+
+async function renderAgents(){const j=await api('/agents');
+$('#view').innerHTML=`<div class="card"><h3>自然语言构建 Agent</h3><input id="nm" placeholder="名称，如：资料研究Agent"><textarea id="ds" rows="2" placeholder="描述职责，如：检索授权知识库并输出带引用的竞品报告"></textarea>
+<button onclick="createAgent()">生成草稿（返回配置差异）</button><pre id="diff" style="display:none"></pre></div>
+<div class="card"><h3>Agent 目录</h3><table><tr><th>名称</th><th>部门</th><th>状态</th><th>版本</th><th>授权</th><th>操作</th></tr>
+${j.agents.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.department)}</td><td>${tag(a.status,a.status==='PUBLISHED'?'ok':'warn')}</td><td>v${a.currentVersion}</td><td>${a.grants.map(g=>tag(g.kind+':'+g.name)).join(' ')}</td>
+<td>${a.status!=='PUBLISHED'?`<button class="small" onclick="publish('${a.id}')">发布 v${a.currentVersion+1}</button>`:`<button class="small ghost" onclick="rollback('${a.id}',${a.currentVersion-1||1})">回滚</button>`}</td></tr>`).join('')||'<tr><td colspan=6>暂无（构建者账号可创建）</td></tr>'}</table></div>`}
+async function createAgent(){try{const j=await api('/agents/drafts',{method:'POST',body:JSON.stringify({name:$('#nm').value,description:$('#ds').value,config:{modelPolicy:'deepseek-chat',output:'docx'}})});
+$('#diff').style.display='block';$('#diff').textContent='配置差异:\n'+JSON.stringify(j.diff,null,2);toast('草稿已创建');setTimeout(renderAgents,600)}catch(e){toast(e.message)}}
+async function publish(id){try{const j=await api('/agents/'+id+'/publish',{method:'POST'});toast('已发布 v'+j.version)}catch(e){toast(e.message)}renderAgents()}
+async function rollback(id,v){if(v<1)return toast('无更早版本');try{const j=await api('/agents/'+id+'/rollback',{method:'POST',body:JSON.stringify({version:v})});toast('已回滚到 v'+j.currentVersion)}catch(e){toast(e.message)}renderAgents()}
+
+async function renderJudgments(){const j=await api('/judgments');
+$('#view').innerHTML=`<div class="card"><h3>提交纠正（生成候选规则）</h3><input id="jr" placeholder="规则，如：must_contain:引用来源"><input id="jf" placeholder="纠正来源（必填），如：用户纠正：报告缺数据来源">
+<button onclick="addCand()">提交候选</button></div>
+<div class="card"><h3>规则与执行证据</h3><table><tr><th>规则</th><th>类型</th><th>状态</th><th>版本</th><th>最近评估</th><th>操作</th></tr>
+${j.rules.map(r=>`<tr><td>${esc(r.rule)}</td><td>${r.kind}</td><td>${tag(r.status,r.status==='APPROVED'?'ok':r.status==='CANDIDATE'?'warn':'')}</td><td>v${r.version}</td>
+<td>${r.applications.map(a=>tag(a.evaluation,a.evaluation==='PASS'?'ok':a.evaluation==='FAIL'?'bad':'warn')).join(' ')||'—'}</td>
+<td>${r.status==='CANDIDATE'?`<button class="small" onclick="approveRule('${r.id}')">批准</button>`:r.status==='APPROVED'?`<button class="small ghost" onclick="disableRule('${r.id}')">停用</button>`:''}</td></tr>`).join('')||'<tr><td colspan=6>暂无</td></tr>'}</table></div>`}
+async function addCand(){try{await api('/judgments/candidates',{method:'POST',body:JSON.stringify({rule:$('#jr').value,kind:'MECHANICAL',scopeType:'ORGANIZATION',scopeId:me.organizationId,sourceFeedback:$('#jf').value})});toast('候选已提交，待审阅者批准');renderJudgments()}catch(e){toast(e.message)}}
+async function approveRule(id){try{
+const list=await api("/approvals");
+const ap=list.approvals.find(x=>x.subjectId===id&&x.decision==="PENDING");
+if(!ap)return toast("未找到待审批单（需审阅者/管理员账号）");
+await api("/approvals/"+ap.id+"/decision",{method:"POST",body:JSON.stringify({decision:"APPROVED"})});
+toast("已批准，规则生效");renderJudgments()}catch(e){toast(e.message)}}
+async function disableRule(id){try{await api('/judgments/'+id+'/disable',{method:'POST'});toast('已停用');renderJudgments()}catch(e){toast(e.message)}}
+
+async function renderFiles(){const who=me.email;void who;
+$('#view').innerHTML=`<div class="card"><h3>上传项目文件</h3><input id="fn" placeholder="文件名"><textarea id="fc" rows="4" placeholder="文件内容（文本演示）"></textarea>
+<button onclick="up()">上传到项目 市场洞察</button></div><div id="flist" class="card"><h3>我的文件</h3><p style="color:var(--mut)">上传后在此下载（权限受组织/项目边界控制）。</p></div>`}
+let lastFile='';
+async function up(){try{const j=await api('/files',{method:'POST',body:JSON.stringify({name:$('#fn').value,contentBase64:btoa(unescape(encodeURIComponent($('#fc').value))),projectId:'proj-market',sourceUrl:''})});
+lastFile=j.file.id;$('#flist').innerHTML+=`<p>${esc(j.file.name)} ${tag(j.file.sizeBytes+'B')} <a style="color:var(--acc)" href="/api/files/${j.file.id}/download?token=${encodeURIComponent(token)}">下载</a></p>`;toast('上传成功（真实 S3 往返）')}catch(e){toast(e.message)}}
+
+async function renderIntegrations(){const s=await api('/integrations/status');
+$('#view').innerHTML=`<div class="card"><h3>集成状态（未配置如实标注）</h3>
+<p>模型网关: ${tag(s.modelGateway,s.modelGateway==='mock'?'warn':'ok')} ${esc(s.modelDisclaimer)}</p>
+<p>Kdocs: ${tag(s.kdocs,'warn')}</p><p>IMA: ${tag(s.ima,'warn')}</p><p>TinyFish: ${tag(s.tinyfish,'warn')}</p>
+<p style="color:var(--mut);font-size:12px">配置真实凭证后，对应状态由服务端探测更新；未配置项不提供真实服务。</p></div>`}
+
+token?boot().catch(renderLogin):renderLogin();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "total": 91,
+  "noInbound": [
+    "core/log.ts",
+    "execution/reactor-bridge.ts",
+    "kernel-entry.ts",
+    "memory/retriever.ts",
+    "panel/chat-client.ts",
+    "panel/launch.ts"
+  ],
+  "piDependentModules": 0
+}
